@@ -1,0 +1,182 @@
+import numpy as np
+
+# Settings: number of agents and rewards; reward range
+agent_count = 400
+reward_count = 60
+end_range = 100
+gamma = 0.5
+start_range = ((gamma*gamma)/(gamma + gamma*gamma))*end_range # for range purposes
+
+# Function to generate a rewards array: shape (reward_count, 1)
+def assign_rewards(reward_count, start_range, end_range):
+    rewards = np.random.randint(start_range, end_range + 1, size=(reward_count, 1))
+    return rewards
+
+# Function to generate a rank array: each row is a random permutation of [1,2,...,agent_count]
+def assign_ranks(agent_count, reward_count):
+    perm = list(range(1, agent_count + 1))
+    rank_array = []
+    for _ in range(reward_count):
+        row = np.random.permutation(perm)
+        rank_array.append(row)
+    return np.array(rank_array)
+
+# Helper function to get an agent's rank for a reward (1-indexed)
+def get_rank(ranks, agent, reward):
+    return ranks[reward - 1][agent - 1]
+
+# Helper function to get the reward value for a given reward number
+def get_rewards(rewards, reward):
+    return rewards[reward - 1][0]
+
+# Create the rewards and rank arrays
+rewards_array = assign_rewards(reward_count, start_range, end_range)
+ranks = assign_ranks(agent_count, reward_count)
+
+# Print the generated arrays
+print("Rewards Array (each row is a reward value):")
+print(rewards_array)
+print("\nRank Array (each row corresponds to a reward; each column gives an agent's rank):")
+print(ranks)
+
+# Define a function to calculate the weight factor for an agent's assigned reward.
+def get_weight_factor(assignments, agent_number):
+    # The agent's assigned reward (1-indexed)
+    reward_number = assignments[agent_number]
+    # Get this agent's rank (1-indexed)
+    my_rank = get_rank(ranks, agent_number + 1, reward_number)
+    
+    # Calculate weight based on the formula: wi,j = γ^rank
+    my_weight = gamma ** (my_rank - 1)  # -1 if ranks start at 1
+    
+    # Sum the weights of all agents assigned to the same reward
+    sum_weights = 0
+    for i in range(len(assignments)):
+        if assignments[i] == reward_number:
+            agent_rank = get_rank(ranks, i + 1, reward_number)
+            sum_weights += gamma ** (agent_rank - 1)  # -1 if ranks start at 1
+    
+    # Avoid division by zero
+    if sum_weights == 0:
+        return 0.0
+    return my_weight / sum_weights
+
+# Define a function to compute an agent's weighted reward.
+def get_reward(assignments, agent_number):
+    weight_factor = get_weight_factor(assignments, agent_number)
+    reward_value = get_rewards(rewards_array, assignments[agent_number])
+    return weight_factor * reward_value
+
+# Calculate envy according to the formula: Etotal = Σ max(0, Um - Uj)
+def calculate_envy(weighted_rewards):
+    total_envy = 0
+    for i in range(agent_count):
+        agent_envy = 0
+        for j in range(agent_count):
+            if i != j:
+                agent_envy += max(0, weighted_rewards[j] - weighted_rewards[i])
+        total_envy += agent_envy
+    return total_envy
+
+# Calculate potential function: Φ(r) = Σ log(ri)
+def calculate_potential(weighted_rewards):
+    # Handle possible negative or zero rewards with a small epsilon
+    epsilon = 1e-10
+    return np.sum(np.log(np.maximum(weighted_rewards, epsilon)))
+
+def print_stats(assignments):
+    print("\nAssignments Array (each agent is assigned a reward number):")
+    print(assignments)
+    
+    # Compute weighted rewards
+    weighted_rewards = np.array([get_reward(assignments, i) for i in range(agent_count)])
+    
+    # Print each agent's weighted reward
+    print("\nComputed weighted reward for each agent:")
+    for i in range(min(10, agent_count)):  # Print first 10 to save space
+        print(f"Agent {i+1} (assigned reward {assignments[i]}): Weighted Reward = {weighted_rewards[i]:.2f}")
+    print("...")
+    
+    # Compute and print the envy and potential
+    envy_value = calculate_envy(weighted_rewards)
+    potential_value = calculate_potential(weighted_rewards)
+    print(f"\nTotal envy: {envy_value:.2f}")
+    print(f"Potential function value: {potential_value:.2f}")
+
+def print_short_stats(assignments):
+    weighted_rewards = np.array([get_reward(assignments, i) for i in range(agent_count)])
+    envy_value = calculate_envy(weighted_rewards)
+    potential_value = calculate_potential(weighted_rewards)
+    print(f"Total envy: {envy_value:.2f}, Potential: {potential_value:.2f}")
+
+# Create a random initial assignment for each agent
+assignments = np.random.randint(1, reward_count + 1, size=agent_count)
+print("\nInitial assignment stats:")
+print_stats(assignments)
+
+# Implement the shift_an_agent function to maximize potential, not minimize envy
+def shift_an_agent(assignment, agent_number):
+    """
+    For the given agent, try every possible reward and update to the one
+    that maximizes the overall potential function.
+    """
+    original_assignment = assignment.copy()
+    best_assignment = assignment[agent_number]
+    
+    # Calculate current weighted rewards and potential
+    current_weighted_rewards = np.array([get_reward(assignment, i) for i in range(agent_count)])
+    best_potential = calculate_potential(current_weighted_rewards)
+    
+    # Try all candidate rewards
+    for candidate in range(1, reward_count + 1):
+        if candidate == assignment[agent_number]:
+            continue  # Skip current assignment
+            
+        temp_assignment = assignment.copy()
+        temp_assignment[agent_number] = candidate
+        
+        # Calculate potential with this candidate assignment
+        temp_weighted_rewards = np.array([get_reward(temp_assignment, i) for i in range(agent_count)])
+        candidate_potential = calculate_potential(temp_weighted_rewards)
+        
+        if candidate_potential > best_potential:
+            print(f"Agent {agent_number+1} shifted from reward {best_assignment} to reward {candidate}")
+            best_potential = candidate_potential
+            best_assignment = candidate
+    
+    # Update assignment only if there's an improvement
+    assignment[agent_number] = best_assignment
+    return assignment
+
+def one_iteration(assignments):
+    """
+    Performs one full iteration by letting each agent shift its reward assignment.
+    """
+    new_assignments = assignments.copy()
+    for i in range(agent_count):
+        new_assignments = shift_an_agent(new_assignments, i)
+    return new_assignments
+
+# Iteratively apply one_iteration until assignments converge
+count = 0
+while True:
+    print(f"\nIteration {count}:")
+    new_assignments = one_iteration(assignments)
+    print_short_stats(new_assignments)
+    
+    # Check for convergence
+    if np.array_equal(new_assignments, assignments):
+        print("\nConverged! No further improvements.")
+        break
+        
+    assignments = new_assignments.copy()
+    count += 1
+    
+    # Optional: add a maximum iteration limit
+    if count >= 50:
+        print("\nReached maximum iterations.")
+        break
+
+print("\nFinal assignment stats:")
+print_stats(assignments)
+print(f"\nNumber of iterations for convergence = {count}")
