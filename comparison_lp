@@ -1,0 +1,298 @@
+
+
+import gurobipy as gp
+from gurobipy import GRB
+import numpy as np
+
+def gurobi_minimax_envy_optimization(n, k, v, weights):
+    """
+    Solve the minimax envy allocation problem using Gurobi optimization.
+    
+    Parameters:
+    - n: number of agents
+    - k: number of supervisors
+    - v: list/array of supervisor values
+    - weights: 2D array of preference-based weights
+    
+    Returns:
+    - Optimal allocation, utilities, and maximum envy
+    """
+    
+    # Create the Gurobi model
+    model = gp.Model("MinimaxEnvyAllocation")
+    model.Params.OutputFlag = 0  # Suppress output
+    
+    # Decision variables
+    x = {}  # Assignment variables
+    u = {}  # Utility variables
+    
+    # Create binary assignment variables
+    for i in range(k):
+        for j in range(n):
+            x[i, j] = model.addVar(vtype=GRB.BINARY, name=f"x_{i}_{j}")
+    
+    # Create utility variables for each agent
+    for j in range(n):
+        u[j] = model.addVar(lb=-GRB.INFINITY, name=f"u_{j}")
+    
+    # Maximum envy variable
+    max_envy = model.addVar(lb=0, name="max_envy")
+    
+    # Constraint: Each agent is assigned exactly one supervisor
+    for j in range(n):
+        model.addConstr(gp.quicksum(x[i, j] for i in range(k)) == 1, f"agent_{j}_assignment")
+    
+    # Constraint: Each supervisor gets at least one agent
+    for i in range(k):
+        model.addConstr(gp.quicksum(x[i, j] for j in range(n)) >= 1, f"supervisor_{i}_assignment")
+    
+    # Utility computation constraints
+    for j in range(n):
+        # Find the supervisor assigned to agent j
+        utility_expr = gp.LinExpr()
+        for i in range(k):
+            # Compute supervisor's load (total weight of assigned agents)
+            supervisor_load = gp.quicksum(weights[i][m] * x[i, m] for m in range(n))
+            
+            # Utility for agent j if assigned to supervisor i
+            utility_term = (weights[i][j] * v[i] * x[i, j]) / supervisor_load
+            utility_expr += utility_term
+        
+        # Set utility variable
+        model.addConstr(u[j] == utility_expr, f"utility_{j}")
+    
+    # Envy constraints
+    for j in range(n):
+        for m in range(n):
+            if j != m:
+                # Envy is the max difference in utilities
+                model.addConstr(max_envy >= u[m] - u[j], f"envy_{j}_{m}")
+    
+    # Objective: Minimize maximum envy
+    model.setObjective(max_envy, GRB.MINIMIZE)
+    
+    # Solve the model
+    model.optimize()
+    
+    # Extract results
+    if model.status == GRB.OPTIMAL:
+        # Create allocation matrix
+        allocation = np.zeros((k, n), dtype=int)
+        for i in range(k):
+            for j in range(n):
+                allocation[i, j] = round(x[i, j].X)
+        
+        # Extract utilities
+        utilities = np.zeros(n)
+        for j in range(n):
+            utilities[j] = u[j].X
+        
+        max_envy_value = max_envy.X
+        
+        return allocation, utilities, max_envy_value
+    else:
+        print(f"Optimization failed with status {model.status}")
+        return None, None, None
+
+def potential_based_envy_minimization(agent_count, reward_count,rewards,weights, gamma):
+    """
+    Perform potential-based envy minimization.
+    
+    Parameters:
+    - agent_count: number of agents
+    - reward_count: number of supervisors/rewards
+    - end_range: maximum reward value
+    - gamma: discount factor
+    
+    Returns:
+    - Final assignments
+    - Envy value
+    - Potential value
+    """
+    # Calculate start range based on gamma
+    # start_range = ((gamma*gamma)/(gamma + gamma*gamma))*end_range
+
+    # Function to generate rewards array
+    # def assign_rewards(reward_count, start_range, end_range):
+    #     rewards = np.random.randint(start_range, end_range + 1, size=(reward_count, 1))
+    #     return rewards
+
+    # Function to generate rank array
+    # def assign_ranks(agent_count, reward_count):
+    #     perm = list(range(1, agent_count + 1))
+    #     rank_array = []
+    #     for _ in range(reward_count):
+    #         row = np.random.permutation(perm)
+    #         rank_array.append(row)
+    #     return np.array(rank_array)
+
+    # Helper functions for rank and reward retrieval
+    # def get_rank(ranks, agent, reward):
+    #     return ranks[reward - 1][agent - 1]
+
+    # def get_rewards(rewards, reward):
+    #     return rewards[reward - 1][0]
+
+    # Generate rewards and ranks
+    # rewards_array = assign_rewards(reward_count, start_range, end_range)
+    # ranks = assign_ranks(agent_count, reward_count)
+
+    # Weight factor calculation
+    def get_weight_factor(assignments, agent_number):
+        reward_number = assignments[agent_number]
+        # my_rank = get_rank(ranks, agent_number + 1, reward_number)
+        
+        my_weight = weights[reward_number - 1][agent_number]
+        
+        sum_weights = sum(
+            weights[assignments[i] - 1][i]
+            for i in range(len(assignments)) 
+            if assignments[i] == reward_number
+        )
+        
+        return my_weight / sum_weights if sum_weights > 0 else 0.0
+
+    # Reward calculation
+    def get_reward(assignments, agent_number):
+        weight_factor = get_weight_factor(assignments, agent_number)
+        reward_value = rewards[assignments[agent_number] - 1]
+        return weight_factor * reward_value
+
+    # Envy calculation
+    def calculate_envy(weighted_rewards):
+        max_envy = 0
+        for i in range(agent_count):
+            for j in range(agent_count):
+                if i != j:
+                    envy = max(0, weighted_rewards[j] - weighted_rewards[i])
+                    if envy > max_envy:
+                        max_envy = envy
+        return max_envy
+
+    # Potential function calculation
+    def calculate_potential(weighted_rewards):
+        epsilon = 1e-10
+        return np.sum(np.log(np.maximum(weighted_rewards, epsilon)))
+
+    # Initial random assignment
+    assignments = np.random.randint(1, reward_count + 1, size=agent_count)
+
+    # Shift agent function
+    def shift_an_agent(assignment, agent_number):
+        original_assignment = assignment.copy()
+        best_assignment = assignment[agent_number]
+        
+        current_weighted_rewards = np.array([get_reward(assignment, i) for i in range(agent_count)])
+        best_potential = calculate_potential(current_weighted_rewards)
+        
+        for candidate in range(1, reward_count + 1):
+            if candidate == assignment[agent_number]:
+                continue
+                
+            temp_assignment = assignment.copy()
+            temp_assignment[agent_number] = candidate
+            
+            temp_weighted_rewards = np.array([get_reward(temp_assignment, i) for i in range(agent_count)])
+            candidate_potential = calculate_potential(temp_weighted_rewards)
+            
+            if candidate_potential > best_potential:
+                best_potential = candidate_potential
+                best_assignment = candidate
+        
+        assignment[agent_number] = best_assignment
+        return assignment
+
+    # Iteration function
+    def one_iteration(assignments):
+        new_assignments = assignments.copy()
+        for i in range(agent_count):
+            new_assignments = shift_an_agent(new_assignments, i)
+        return new_assignments
+
+    # Main optimization loop
+    count = 0
+    while count < 50:
+        new_assignments = one_iteration(assignments)
+        
+        if np.array_equal(new_assignments, assignments):
+            break
+        
+        assignments = new_assignments.copy()
+        count += 1
+
+    # Final weighted rewards and statistics
+    weighted_rewards = np.array([get_reward(assignments, i) for i in range(agent_count)])
+    envy_value = calculate_envy(weighted_rewards)
+    potential_value = calculate_potential(weighted_rewards)
+    #print utility values for each agent
+    for i in range(agent_count):
+        print(f"Agent {i} (assigned reward {assignments[i]}): Weighted Reward = {weighted_rewards[i]:.2f}")
+    return assignments, envy_value, potential_value
+
+def compare_envy_minimization(n=10, k=3, gamma=0.9, end_range=100):
+    """
+    Compare different envy minimization approaches.
+    
+    Parameters:
+    - n: number of agents
+    - k: number of supervisors
+    - gamma: discount factor
+    - end_range: maximum reward value
+    """
+    # Set random seed for reproducibility
+    np.random.seed(42)
+    
+    # Generate example data for Gurobi approach
+    # Supervisor values: random values between 6 and 10
+    v = np.random.uniform(6, 10, k)
+    
+    # Generate preference-based weights using the gamma formula
+    weights = np.zeros((k, n))
+    for i in range(k):
+        # Generate a random preference ordering for supervisor i
+        pref_order = np.random.permutation(n)
+        print(f"Supervisor {i} preference order: {pref_order}")
+        
+        # Assign weights based on rank in the preference list
+        for rank, j in enumerate(pref_order):
+            # wi,j = γ^rank_i(j) as per the model formulation
+            # rank is 0-indexed, but formula uses 1-indexed, so we add 1
+            weights[i, j] = gamma ** (rank + 1)
+    
+    # Gurobi Minimax Envy Optimization
+    print("\n--- Gurobi Minimax Envy Optimization ---")
+    gurobi_allocation, gurobi_utilities, gurobi_max_envy = gurobi_minimax_envy_optimization(n, k, v, weights)
+    
+    if gurobi_allocation is not None:
+        print("\nGurobi Optimal allocation:")
+        for i in range(k):
+            assigned_agents = [j for j in range(n) if gurobi_allocation[i, j] == 1]
+            print(f"Supervisor {i} (value {v[i]:.2f}) assigned to agents: {assigned_agents}")
+        
+        print("\nGurobi Agent utilities:")
+        for j in range(n):
+            print(f"Agent {j}: {gurobi_utilities[j]:.4f}")
+        
+        print(f"\nGurobi Maximum envy: {gurobi_max_envy:.4f}")
+    
+    # Potential-based Envy Minimization
+    print("\n--- Potential-based Envy Minimization ---")
+    pot_assignments, pot_envy , pot_potential = potential_based_envy_minimization(
+        agent_count=n, 
+        reward_count=k, 
+        # end_range=end_range, 
+        rewards=v,weights=weights,
+        gamma=gamma
+    )
+    
+    print("\nPotential-based Allocation:")
+    unique_rewards = np.unique(pot_assignments)
+    for r in unique_rewards:
+        assigned_agents = np.where(pot_assignments == r)[0]
+        print(f"Reward/Supervisor {r}: Agents {assigned_agents.tolist()}")
+    
+    print(f"\nPotential-based Maximum Envy: {pot_envy:.4f}")
+    print(f"Potential-based Potential Value: {pot_potential:.4f}")
+
+if __name__ == "__main__":
+    compare_envy_minimization()
