@@ -1,0 +1,36 @@
+Top 5 Holdings by Weight (GNN Selected):
+Ticker                 Sector Allocation_Percentage
+ GOOGL Communication Services                 15.0%
+   ADM       Consumer Staples                 8.17%
+  COST       Consumer Staples                 7.44%
+   PEP       Consumer Staples                  5.3%
+  META Communication Services                 5.05%
+
+==================================================
+OUT-OF-SAMPLE METRICS: GNN
+==================================================
+Tracking Error (TE):    6.55%
+Correlation:            0.9420
+Portfolio Beta:         0.9459
+Max Drawdown (Port):   -20.17%
+Max Drawdown (Bench):  -22.77%
+==================================================
+
+
+Top 5 Holdings by Weight:
+Ticker  Mean_Abs_SHAP Allocation_Percentage
+   JNJ       0.000059                 8.46%
+    KO       0.000029                 7.65%
+ BRK-B       0.000414                  7.0%
+  AMZN       0.000085                 6.04%
+  AAPL       0.000199                 5.98%
+
+==================================================
+OUT-OF-SAMPLE METRICS: Random Forest + SHAP
+==================================================
+Tracking Error (TE):    3.33%
+Correlation:            0.9853
+Portfolio Beta:         1.0024
+Max Drawdown (Port):   -21.18%
+Max Drawdown (Bench):  -22.77%
+==================================================
