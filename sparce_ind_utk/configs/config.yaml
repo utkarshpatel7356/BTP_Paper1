@@ -1,0 +1,46 @@
+data:
+  index_ticker: "^GSPC"
+  sp500_wiki_url: "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  train_years: 5
+  test_months: 6
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+
+graph:
+  corr_window: 60          # rolling window (days) for correlation edges
+  corr_threshold: 0.30     # minimum abs correlation to keep an edge
+  use_granger: true        # add Granger causality edges
+  granger_maxlag: 5
+  granger_pvalue: 0.05
+  use_sector: true         # add intra-sector edges
+
+model:
+  gnn_hidden: 64
+  gnn_heads: 4
+  gnn_layers: 2
+  gru_window: 60           # temporal lookback (trading days)
+  dropout: 0.1
+  lr: 0.001
+  epochs: 100
+  batch_size: 32
+  device: "cpu"            # change to "cuda" if available
+
+selection:
+  k: 50                    # subset size
+  alpha_shap: 0.5          # weight on SHAP vs GNN influence score
+  min_per_sector: 1        # minimum stocks per GICS sector
+
+allocation:
+  lambda_reg: 0.01         # GNN edge-attention regularisation in QP
+  max_weight: 0.10         # maximum individual stock weight
+  solver: "OSQP"           # cvxpy solver
+
+evaluation:
+  rebalance_freq: "Q"      # quarterly rebalance
+  metrics: ["tracking_error", "info_ratio", "cumulative_return", "max_drawdown"]
+
+outputs:
+  figures_dir: "outputs/figures"
+  results_dir: "outputs/results"
