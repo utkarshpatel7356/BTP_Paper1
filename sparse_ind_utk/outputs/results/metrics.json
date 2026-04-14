@@ -1,0 +1,24 @@
+[
+  {
+    "label": "RF+SHAP baseline",
+    "tracking_error_pct": 3.6313,
+    "info_ratio": 1.7803,
+    "alpha_annual_pct": 6.4647,
+    "total_return_pct": 10.83,
+    "index_total_return_pct": 7.33,
+    "max_drawdown_pct": -8.87,
+    "sharpe": 1.4836,
+    "beta": 0.9828
+  },
+  {
+    "label": "GNN+Influence (ours)",
+    "tracking_error_pct": 4.7899,
+    "info_ratio": 0.7582,
+    "alpha_annual_pct": 3.6315,
+    "total_return_pct": 9.17,
+    "index_total_return_pct": 7.33,
+    "max_drawdown_pct": -9.53,
+    "sharpe": 1.1855,
+    "beta": 1.0535
+  }
+]

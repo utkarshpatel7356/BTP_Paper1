@@ -149,8 +149,15 @@ def main(cfg: dict, skip_download: bool, skip_graph: bool, skip_train: bool):
                                mcfg["gru_window"], mcfg["dropout"])
         ckpt_path = os.path.join("outputs", "best_gnn.pt")
         model.load_state_dict(torch.load(ckpt_path, map_location="cpu"))
-        train_losses = np.load("outputs/train_losses.npy")
-        val_losses = np.load("outputs/val_losses.npy")
+        losses_path_train = "outputs/train_losses.npy"
+        losses_path_val = "outputs/val_losses.npy"
+        if os.path.exists(losses_path_train) and os.path.exists(losses_path_val):
+            train_losses = np.load(losses_path_train)
+            val_losses = np.load(losses_path_val)
+        else:
+            print("  ⚠ Loss files not found — loss curves will be skipped.")
+            train_losses = np.array([])
+            val_losses = np.array([])
 
     # -----------------------------------------------------------------------
     # Stage 5: Influence scoring + fusion
@@ -257,7 +264,10 @@ def main(cfg: dict, skip_download: bool, skip_graph: bool, skip_train: bool):
     figs_dir = cfg["outputs"]["figures_dir"]
     res_dir = cfg["outputs"]["results_dir"]
 
-    plot_loss_curves(train_losses, val_losses, figs_dir)
+    if len(train_losses) > 0 and len(val_losses) > 0:
+        plot_loss_curves(train_losses, val_losses, figs_dir)
+    else:
+        print("  Skipping loss curve plot (no loss data).")
 
     plot_cumulative_returns(
         test_dates, test_idx_ret, baseline_test_returns, hybrid_test_returns, figs_dir
