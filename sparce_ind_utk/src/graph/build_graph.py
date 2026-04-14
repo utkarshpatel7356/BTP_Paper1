@@ -42,7 +42,10 @@ from src.graph.features import compute_index_node_features, compute_log_returns,
 def fetch_sp500_tickers() -> pd.DataFrame:
     """Scrape S&P 500 tickers and GICS sectors from Wikipedia."""
     url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-    tables = pd.read_html(url)
+    tables = pd.read_html(
+        url, 
+        storage_options={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    )
     df = tables[0][["Symbol", "GICS Sector"]].copy()
     df.columns = ["ticker", "sector"]
     df["ticker"] = df["ticker"].str.replace(".", "-", regex=False)
@@ -175,7 +178,7 @@ def build_graph(cfg: dict) -> Data:
 
     # Drop columns with >5% missing
     stock_prices = stock_prices.dropna(thresh=int(0.95 * len(stock_prices)), axis=1)
-    stock_prices = stock_prices.fillna(method="ffill").fillna(method="bfill")
+    stock_prices = stock_prices.ffill().bfill()
 
     index_returns = compute_log_returns(index_prices.to_frame()).iloc[:, 0]
 

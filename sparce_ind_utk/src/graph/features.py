@@ -57,7 +57,7 @@ def compute_node_features(
     feat_ret = returns.values  # (T, N)
 
     # 2. Rolling volatility
-    feat_vol = returns.rolling(vol_window).std().fillna(method="bfill").values
+    feat_vol = returns.rolling(vol_window).std().bfill().values
 
     # 3. Momentum (short and long)
     short_w, long_w = mom_windows
@@ -99,13 +99,13 @@ def compute_index_node_features(
     Falls back to just index returns + vol if macro series not provided.
     """
     ret = index_returns.values.reshape(-1, 1)
-    vol = pd.Series(index_returns).rolling(vol_window).std().fillna(method="bfill").values.reshape(-1, 1)
+    vol = pd.Series(index_returns).rolling(vol_window).std().bfill().values.reshape(-1, 1)
     parts = [ret, vol]
     if vix is not None:
-        vix_aligned = vix.reindex(index_returns.index).fillna(method="ffill").values.reshape(-1, 1)
+        vix_aligned = vix.reindex(index_returns.index).ffill().values.reshape(-1, 1)
         parts.append(vix_aligned)
     if rates is not None:
-        rates_aligned = rates.reindex(index_returns.index).fillna(method="ffill").values.reshape(-1, 1)
+        rates_aligned = rates.reindex(index_returns.index).ffill().values.reshape(-1, 1)
         parts.append(rates_aligned)
     features = np.concatenate(parts, axis=1).astype(np.float32)
     mean = features.mean(axis=0, keepdims=True)
