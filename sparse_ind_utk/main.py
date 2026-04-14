@@ -71,7 +71,7 @@ def main(cfg: dict, skip_download: bool, skip_graph: bool, skip_train: bool):
         graph_data = build_graph(cfg)
     else:
         print(f"Loading cached graph from {graph_path}")
-        graph_data = torch.load(graph_path)
+        graph_data = torch.load(graph_path, weights_only=False)
 
     tickers = graph_data.tickers
     N = graph_data.n_stocks
@@ -85,7 +85,7 @@ def main(cfg: dict, skip_download: bool, skip_graph: bool, skip_train: bool):
     stock_prices = prices_full[tickers].dropna(thresh=int(0.95 * len(prices_full)), axis=1)
     # Realign tickers after dropna
     tickers = [t for t in tickers if t in stock_prices.columns]
-    stock_prices = stock_prices[tickers].fillna(method="ffill").fillna(method="bfill")
+    stock_prices = stock_prices[tickers].ffill().bfill()
 
     all_returns = compute_log_returns(stock_prices).values  # (T, N)
     index_returns = compute_log_returns(index_prices.to_frame()).iloc[:, 0].values  # (T,)
