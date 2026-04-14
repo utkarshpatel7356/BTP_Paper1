@@ -23,6 +23,14 @@ import cvxpy as cp
 from typing import List, Optional, Tuple
 
 
+def _nearest_psd(A: np.ndarray) -> np.ndarray:
+    """Project a symmetric matrix to the nearest PSD matrix."""
+    A = (A + A.T) / 2
+    eigvals, eigvecs = np.linalg.eigh(A)
+    eigvals = np.maximum(eigvals, 0)
+    return eigvecs @ np.diag(eigvals) @ eigvecs.T
+
+
 def solve_tracking_error_qp(
     selected_returns: np.ndarray,    # (T, K) returns of selected stocks
     index_returns: np.ndarray,       # (T,) index returns
@@ -54,6 +62,9 @@ def solve_tracking_error_qp(
     excess = selected_returns - index_returns[:, np.newaxis]  # (T, K)
     Sigma = np.cov(excess.T) + 1e-6 * np.eye(K)              # (K, K)
 
+    # Ensure Sigma is PSD (numerical issues can make it slightly non-PSD)
+    Sigma = _nearest_psd(Sigma)
+
     # Index proxy weights (equal weight if market caps unavailable)
     w_idx = np.ones(K) / K
 
@@ -65,8 +76,8 @@ def solve_tracking_error_qp(
 
     # GNN attention regularisation: penalise correlated pairs
     if attention_matrix is not None:
-        A = attention_matrix
-        A = (A + A.T) / 2  # symmetrise
+        A = (attention_matrix + attention_matrix.T) / 2  # symmetrise
+        A = _nearest_psd(A + 1e-6 * np.eye(K))          # ensure PSD
         reg_term = lambda_reg * cp.quad_form(w, A)
     else:
         reg_term = 0.0
@@ -83,7 +94,12 @@ def solve_tracking_error_qp(
     try:
         prob.solve(solver=solver, verbose=False)
     except cp.SolverError:
-        prob.solve(solver="SCS", verbose=False)
+        print(f"  {solver} failed, trying SCS...")
+        try:
+            prob.solve(solver="SCS", verbose=False)
+        except cp.SolverError:
+            print("  SCS also failed, trying ECOS...")
+            prob.solve(solver="ECOS", verbose=False)
 
     if w.value is None:
         # Fallback: equal weight
@@ -102,8 +118,8 @@ def solve_tracking_error_qp(
 
 
 def build_attention_submatrix(
-    attn_weights: np.ndarray,   # (E,)
-    edge_index: np.ndarray,     # (2, E)
+    attn_weights: np.ndarray,   # (E',) attention weights (may include self-loops)
+    edge_index: np.ndarray,     # (2, E') edge index from GAT (includes self-loops)
     selected_indices: List[int],
     n_total: int,
 ) -> np.ndarray:
@@ -113,8 +129,10 @@ def build_attention_submatrix(
 
     Parameters
     ----------
-    attn_weights     : mean attention weight per edge (E,)
-    edge_index       : (2, E) edge index array
+    attn_weights     : mean attention weight per edge (E',)
+                       — from GAT output, includes self-loops
+    edge_index       : (2, E') edge index from GAT's return_attention_weights
+                       — includes self-loops added by GATConv
     selected_indices : list of int, indices of selected stocks in full graph
     n_total          : total number of nodes (N+1)
 

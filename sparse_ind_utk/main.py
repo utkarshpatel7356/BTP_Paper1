@@ -19,6 +19,7 @@ Pipeline stages:
 """
 
 import argparse
+import gc
 import os
 import json
 import numpy as np
@@ -75,10 +76,8 @@ def main(cfg: dict, skip_download: bool, skip_graph: bool, skip_train: bool):
 
     tickers = graph_data.tickers
     N = graph_data.n_stocks
-    T = graph_data.x.shape[1]
 
-    # Reconstruct returns from node features (slot 0 = normalised return)
-    # We reload raw prices for clean returns
+    # Reconstruct returns from raw prices for clean train/test split
     prices_path = os.path.join(dcfg["raw_dir"], "prices.csv")
     prices_full = pd.read_csv(prices_path, index_col=0, parse_dates=True)
     index_prices = prices_full[dcfg["index_ticker"]]
@@ -129,6 +128,8 @@ def main(cfg: dict, skip_download: bool, skip_graph: bool, skip_train: bool):
         bl_weights = np.ones(scfg["k"]) / scfg["k"]
     baseline_test_returns = shap_test_ret @ bl_weights
 
+    gc.collect()
+
     # -----------------------------------------------------------------------
     # Stage 4: Train GNN
     # -----------------------------------------------------------------------
@@ -146,7 +147,8 @@ def main(cfg: dict, skip_download: bool, skip_graph: bool, skip_train: bool):
         F = graph_data.x.shape[2]
         model = SparseIndexGNN(F, mcfg["gnn_hidden"], mcfg["gnn_heads"], mcfg["gnn_layers"],
                                mcfg["gru_window"], mcfg["dropout"])
-        model.load_state_dict(torch.load("outputs/best_gnn.pt", map_location="cpu"))
+        ckpt_path = os.path.join("outputs", "best_gnn.pt")
+        model.load_state_dict(torch.load(ckpt_path, map_location="cpu"))
         train_losses = np.load("outputs/train_losses.npy")
         val_losses = np.load("outputs/val_losses.npy")
 
@@ -157,17 +159,29 @@ def main(cfg: dict, skip_download: bool, skip_graph: bool, skip_train: bool):
     print("STAGE 5: Influence scoring")
     print("=" * 60)
     model.eval()
+    model.cpu()  # ensure model is on CPU for inference
     with torch.no_grad():
         x_full = graph_data.x[:, -cfg["model"]["gru_window"]:, :]
-        _, embeddings, attn = model(x_full, graph_data.edge_index, graph_data.edge_weight)
+        _, embeddings, attn, attn_edge_index = model(
+            x_full, graph_data.edge_index, graph_data.edge_weight
+        )
 
     embeddings_np = embeddings.detach().cpu().numpy()  # (N+1, hidden)
-    attn_np = attn.detach().cpu().mean(dim=-1).numpy() if attn is not None else None  # mean over heads
+
+    # Process attention weights — attn is (E', heads), attn_edge_index is (2, E')
+    if attn is not None and attn_edge_index is not None:
+        attn_np = attn.detach().cpu().mean(dim=-1).numpy()  # mean over heads → (E',)
+        attn_ei_np = attn_edge_index.detach().cpu().numpy()  # (2, E')
+    else:
+        attn_np = None
+        attn_ei_np = None
 
     print("Running greedy influence maximisation...")
     _, influence_scores = greedy_influence_maximisation(embeddings_np, k=scfg["k"], tickers=tickers)
 
     hybrid_scores = fuse_scores(shap_scores, influence_scores, alpha=scfg["alpha_shap"])
+
+    gc.collect()
 
     # -----------------------------------------------------------------------
     # Stage 6: Subset selection with sector constraint
@@ -193,9 +207,9 @@ def main(cfg: dict, skip_download: bool, skip_graph: bool, skip_train: bool):
     print("STAGE 7: QP budget allocation")
     print("=" * 60)
     A_attn = None
-    if attn_np is not None:
+    if attn_np is not None and attn_ei_np is not None:
         A_attn = build_attention_submatrix(
-            attn_np, graph_data.edge_index.numpy(), selected_idx, n_total=N + 1
+            attn_np, attn_ei_np, selected_idx, n_total=N + 1
         )
 
     weights, train_te = solve_tracking_error_qp(

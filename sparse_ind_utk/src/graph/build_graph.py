@@ -9,7 +9,7 @@ Nodes:
 
 Edges (stock-stock):
   - Rolling Pearson correlation  (weight = abs corr, threshold filtered)
-  - Granger causality            (binary, p-value threshold)
+  - Granger causality            (binary, p-value threshold) — intra-sector only
   - Same GICS sector             (binary weight = 1.0)
 
 Edge (stock → index):
@@ -20,6 +20,7 @@ Usage (standalone download):
 """
 
 import argparse
+import gc
 import os
 import pickle
 from typing import Dict, List, Tuple
@@ -43,7 +44,7 @@ def fetch_sp500_tickers() -> pd.DataFrame:
     """Scrape S&P 500 tickers and GICS sectors from Wikipedia."""
     url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
     tables = pd.read_html(
-        url, 
+        url,
         storage_options={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     )
     df = tables[0][["Symbol", "GICS Sector"]].copy()
@@ -74,12 +75,17 @@ def build_correlation_edges(
     threshold: float,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Compute mean rolling correlation matrix; keep edges above threshold.
+    Compute correlation matrix using standard pairwise correlation (memory-efficient).
+    Keeps edges above threshold.
     Returns edge_index (2, E) and edge_weight (E,) arrays.
     """
     n = returns.shape[1]
-    corr_matrix = returns.rolling(window).corr().groupby(level=1).mean().values  # (N, N)
+    # Use standard correlation instead of rolling().corr() to avoid O(T*N*N) memory
+    # The rolling corr approach creates a MultiIndex DF of shape (T*N, N) which is ~375M entries
+    corr_matrix = returns.corr().values  # (N, N) — simple, memory-efficient
     np.fill_diagonal(corr_matrix, 0)
+    # Replace NaN with 0 (stocks with constant returns)
+    corr_matrix = np.nan_to_num(corr_matrix, nan=0.0)
     mask = np.abs(corr_matrix) >= threshold
     src, dst = np.where(mask)
     weights = np.abs(corr_matrix[mask])
@@ -90,33 +96,53 @@ def build_granger_edges(
     returns: pd.DataFrame,
     maxlag: int,
     pvalue_threshold: float,
+    sector_map: Dict[str, str] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Granger causality: stock i → stock j if i's lags help predict j.
-    Only tests a sample of pairs (O(N) random pairs) for speed.
+    Only tests intra-sector pairs to keep runtime manageable.
     Returns edge_index (2, E) and edge_weight (E,) arrays (weights = 1.0).
     """
     tickers = returns.columns.tolist()
     n = len(tickers)
     src_list, dst_list = [], []
 
-    # To keep runtime manageable, only test pairs within same sector
-    # Full N×N Granger is O(N^2) — feasible offline, slow interactively
-    for i in tqdm(range(n), desc="Granger causality"):
-        for j in range(n):
-            if i == j:
-                continue
-            try:
-                test_data = pd.concat(
-                    [returns.iloc[:, j], returns.iloc[:, i]], axis=1
-                ).dropna()
-                result = grangercausalitytests(test_data, maxlag=maxlag, verbose=False)
-                min_p = min(result[lag][0]["ssr_ftest"][1] for lag in range(1, maxlag + 1))
-                if min_p < pvalue_threshold:
-                    src_list.append(i)
-                    dst_list.append(j)
-            except Exception:
-                continue
+    # Build sector groups for intra-sector testing only
+    if sector_map is not None:
+        sector_groups = {}
+        for idx, t in enumerate(tickers):
+            s = sector_map.get(t, "Unknown")
+            sector_groups.setdefault(s, []).append(idx)
+    else:
+        # Fallback: treat all as one sector (full N² — not recommended)
+        sector_groups = {"all": list(range(n))}
+
+    total_pairs = sum(len(v) * (len(v) - 1) for v in sector_groups.values())
+    print(f"  Testing {total_pairs} intra-sector pairs (vs {n*(n-1)} full N²)")
+
+    tested = 0
+    for sector_name, members in tqdm(sector_groups.items(), desc="Granger (by sector)"):
+        for i in members:
+            for j in members:
+                if i == j:
+                    continue
+                try:
+                    test_data = pd.concat(
+                        [returns.iloc[:, j], returns.iloc[:, i]], axis=1
+                    ).dropna()
+                    if len(test_data) < maxlag + 2:
+                        continue
+                    result = grangercausalitytests(test_data, maxlag=maxlag, verbose=False)
+                    min_p = min(result[lag][0]["ssr_ftest"][1] for lag in range(1, maxlag + 1))
+                    if min_p < pvalue_threshold:
+                        src_list.append(i)
+                        dst_list.append(j)
+                except Exception:
+                    continue
+                tested += 1
+                # Periodic garbage collection to prevent memory buildup
+                if tested % 500 == 0:
+                    gc.collect()
 
     if not src_list:
         return np.empty((2, 0), dtype=np.int64), np.empty(0)
@@ -193,7 +219,7 @@ def build_graph(cfg: dict) -> Data:
         idx_features = np.concatenate([idx_features, pad], axis=1)
     idx_features = idx_features[:, :F]
 
-    # Shape: (N+1, T, F)  — we store as (N+1, T, F) then use last T steps
+    # Shape: (N+1, T, F) — we store as (N+1, T, F) then use last T steps
     all_features = np.concatenate(
         [node_features.transpose(1, 0, 2), idx_features[np.newaxis]], axis=0
     )  # (N+1, T, F)
@@ -210,19 +236,21 @@ def build_graph(cfg: dict) -> Data:
     edge_indices = [ei_corr]
     edge_weights = [ew_corr]
 
+    # Load sector info (needed for both sector edges and Granger)
+    sector_df = fetch_sp500_tickers()
+    sector_map = dict(zip(sector_df["ticker"], sector_df["sector"]))
+
     if gcfg.get("use_sector", True):
         print("Building sector edges...")
-        # Load sector info
-        sector_df = fetch_sp500_tickers()
-        sector_map = dict(zip(sector_df["ticker"], sector_df["sector"]))
         ei_sec, ew_sec = build_sector_edges(sector_map, tickers)
         edge_indices.append(ei_sec)
         edge_weights.append(ew_sec)
 
     if gcfg.get("use_granger", False):
-        print("Building Granger edges (slow — disable in config for quick runs)...")
+        print("Building Granger edges (intra-sector only)...")
         ei_gr, ew_gr = build_granger_edges(
-            returns_df, gcfg["granger_maxlag"], gcfg["granger_pvalue"]
+            returns_df, gcfg["granger_maxlag"], gcfg["granger_pvalue"],
+            sector_map=sector_map,
         )
         edge_indices.append(ei_gr)
         edge_weights.append(ew_gr)
@@ -230,6 +258,7 @@ def build_graph(cfg: dict) -> Data:
     # Stock → index sink edges (weight = mean abs return correlation with index)
     idx_node = n  # index of the sink node
     corr_with_idx = returns_df.corrwith(index_returns).abs().values
+    corr_with_idx = np.nan_to_num(corr_with_idx, nan=0.0)
     src_to_idx = np.arange(n)
     dst_to_idx = np.full(n, idx_node)
     ei_to_idx = np.stack([src_to_idx, dst_to_idx])
@@ -265,6 +294,8 @@ def build_graph(cfg: dict) -> Data:
     print(f"Graph saved → {out_path}")
     print(f"  Nodes: {n+1} ({n} stocks + 1 index)")
     print(f"  Edges: {final_ei.shape[1]}")
+
+    gc.collect()
     return data
 
 

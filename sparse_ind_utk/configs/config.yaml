@@ -11,7 +11,7 @@ data:
 graph:
   corr_window: 60          # rolling window (days) for correlation edges
   corr_threshold: 0.30     # minimum abs correlation to keep an edge
-  use_granger: true        # add Granger causality edges
+  use_granger: false       # intra-sector Granger edges (slow — enable after testing)
   granger_maxlag: 5
   granger_pvalue: 0.05
   use_sector: true         # add intra-sector edges
@@ -20,12 +20,12 @@ model:
   gnn_hidden: 64
   gnn_heads: 4
   gnn_layers: 2
-  gru_window: 60           # temporal lookback (trading days)
+  gru_window: 20           # temporal lookback (trading days) — reduced for T4 GPU
   dropout: 0.1
   lr: 0.001
   epochs: 100
-  batch_size: 32
-  device: "cpu"            # change to "cuda" if available
+  batch_size: 1
+  device: "cuda"           # Tesla T4 GPU
 
 selection:
   k: 50                    # subset size
