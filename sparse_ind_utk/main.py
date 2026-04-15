@@ -11,10 +11,11 @@ Pipeline stages:
     2. Build graph (nodes, edges, features)
     3. Run RF + SHAP baseline
     4. Train GNN
-    5. Compute influence scores + fuse with SHAP
-    6. Select subset with sector constraint
-    7. Solve QP for budget allocation
-    8. Evaluate on test split
+    5. Compute influence scores
+    5.5 Embedding regressor + SHAP (NEW)
+    6. Three-way fusion + sector-constrained selection
+    7. Solve QP for budget allocation (both hybrid v1 and v2)
+    8. Evaluate on test split (3 strategies)
     9. Save plots and results
 """
 
@@ -34,8 +35,10 @@ from src.models.train import train_model
 from src.selection.influence import (
     greedy_influence_maximisation,
     fuse_scores,
+    fuse_scores_v2,
     select_with_sector_constraint,
 )
+from src.selection.embedding_regressor import train_embedding_regressor
 from src.allocation.qp_solver import solve_tracking_error_qp, build_attention_submatrix
 from src.evaluation.metrics import (
     compute_metrics,
@@ -44,6 +47,7 @@ from src.evaluation.metrics import (
     plot_weight_allocation,
     plot_loss_curves,
     plot_influence_scores,
+    plot_shap_comparison,
     save_results,
 )
 
@@ -186,7 +190,33 @@ def main(cfg: dict, skip_download: bool, skip_graph: bool, skip_train: bool):
     print("Running greedy influence maximisation...")
     _, influence_scores = greedy_influence_maximisation(embeddings_np, k=scfg["k"], tickers=tickers)
 
-    hybrid_scores = fuse_scores(shap_scores, influence_scores, alpha=scfg["alpha_shap"])
+    # Legacy two-way fusion (kept for Hybrid v1 comparison)
+    hybrid_scores_v1 = fuse_scores(shap_scores, influence_scores, alpha=scfg["alpha_shap"])
+
+    gc.collect()
+
+    # -----------------------------------------------------------------------
+    # Stage 5.5: Embedding regressor + SHAP  (NEW)
+    # -----------------------------------------------------------------------
+    print("\n" + "=" * 60)
+    print("STAGE 5.5: Embedding regressor + SHAP")
+    print("=" * 60)
+    emb_shap_scores, emb_regressor, emb_sim = train_embedding_regressor(
+        embeddings_np,
+        train_stock_ret,
+        train_idx_ret,
+        tickers,
+        ridge_alpha=scfg.get("ridge_alpha", 1.0),
+    )
+
+    # Three-way fusion → Hybrid v2 scores
+    hybrid_scores_v2 = fuse_scores_v2(
+        shap_rf=shap_scores,
+        shap_emb=emb_shap_scores,
+        influence_scores=influence_scores,
+        alpha=scfg["alpha_shap"],
+        beta=scfg.get("beta_emb_shap", 0.4),
+    )
 
     gc.collect()
 
@@ -199,60 +229,87 @@ def main(cfg: dict, skip_download: bool, skip_graph: bool, skip_train: bool):
     sp500_df = fetch_sp500_tickers()
     sector_map = dict(zip(sp500_df["ticker"], sp500_df["sector"]))
 
-    selected = select_with_sector_constraint(
-        hybrid_scores, tickers, sector_map, k=scfg["k"],
+    # --- Hybrid v1 selection (legacy: RF-SHAP + influence) ---
+    selected_v1 = select_with_sector_constraint(
+        hybrid_scores_v1, tickers, sector_map, k=scfg["k"],
         min_per_sector=scfg["min_per_sector"]
     )
-    print(f"Selected {len(selected)} stocks: {selected[:5]} ...")
+    print(f"Hybrid v1 selected {len(selected_v1)} stocks: {selected_v1[:5]} ...")
+    selected_v1_idx = [tickers.index(t) for t in selected_v1]
 
-    selected_idx = [tickers.index(t) for t in selected]
+    # --- Hybrid v2 selection (NEW: RF-SHAP + Emb-SHAP + influence) ---
+    selected_v2 = select_with_sector_constraint(
+        hybrid_scores_v2, tickers, sector_map, k=scfg["k"],
+        min_per_sector=scfg["min_per_sector"]
+    )
+    print(f"Hybrid v2 selected {len(selected_v2)} stocks: {selected_v2[:5]} ...")
+    selected_v2_idx = [tickers.index(t) for t in selected_v2]
 
     # -----------------------------------------------------------------------
-    # Stage 7: QP budget allocation
+    # Stage 7: QP budget allocation (both hybrids)
     # -----------------------------------------------------------------------
     print("\n" + "=" * 60)
     print("STAGE 7: QP budget allocation")
     print("=" * 60)
-    A_attn = None
-    if attn_np is not None and attn_ei_np is not None:
-        A_attn = build_attention_submatrix(
-            attn_np, attn_ei_np, selected_idx, n_total=N + 1
-        )
 
-    weights, train_te = solve_tracking_error_qp(
-        selected_returns=train_stock_ret[:, selected_idx],
+    # --- v1 weights ---
+    A_attn_v1 = None
+    if attn_np is not None and attn_ei_np is not None:
+        A_attn_v1 = build_attention_submatrix(
+            attn_np, attn_ei_np, selected_v1_idx, n_total=N + 1
+        )
+    weights_v1, train_te_v1 = solve_tracking_error_qp(
+        selected_returns=train_stock_ret[:, selected_v1_idx],
         index_returns=train_idx_ret,
-        attention_matrix=A_attn,
+        attention_matrix=A_attn_v1,
         lambda_reg=acfg["lambda_reg"],
         max_weight=acfg["max_weight"],
         solver=acfg["solver"],
     )
-    print(f"Train TE (annualised): {train_te:.2f}%")
-    print("Top 5 weights:")
-    order = np.argsort(weights)[::-1]
-    for i in order[:5]:
-        print(f"  {selected[i]:8s}  {weights[i]*100:.2f}%")
+    print(f"\n[Hybrid v1] Train TE: {train_te_v1:.2f}%")
+    order_v1 = np.argsort(weights_v1)[::-1]
+    for i in order_v1[:3]:
+        print(f"  {selected_v1[i]:8s}  {weights_v1[i]*100:.2f}%")
+
+    # --- v2 weights ---
+    A_attn_v2 = None
+    if attn_np is not None and attn_ei_np is not None:
+        A_attn_v2 = build_attention_submatrix(
+            attn_np, attn_ei_np, selected_v2_idx, n_total=N + 1
+        )
+    weights_v2, train_te_v2 = solve_tracking_error_qp(
+        selected_returns=train_stock_ret[:, selected_v2_idx],
+        index_returns=train_idx_ret,
+        attention_matrix=A_attn_v2,
+        lambda_reg=acfg["lambda_reg"],
+        max_weight=acfg["max_weight"],
+        solver=acfg["solver"],
+    )
+    print(f"\n[Hybrid v2] Train TE: {train_te_v2:.2f}%")
+    order_v2 = np.argsort(weights_v2)[::-1]
+    for i in order_v2[:3]:
+        print(f"  {selected_v2[i]:8s}  {weights_v2[i]*100:.2f}%")
 
     # -----------------------------------------------------------------------
-    # Stage 8: Evaluate on test split
+    # Stage 8: Evaluate on test split (3 strategies)
     # -----------------------------------------------------------------------
     print("\n" + "=" * 60)
     print("STAGE 8: Test evaluation")
     print("=" * 60)
-    hybrid_test_returns = test_stock_ret[:, selected_idx] @ weights
+    hybrid_v1_test_returns = test_stock_ret[:, selected_v1_idx] @ weights_v1
+    hybrid_v2_test_returns = test_stock_ret[:, selected_v2_idx] @ weights_v2
 
     metrics_baseline = compute_metrics(baseline_test_returns, test_idx_ret, label="RF+SHAP baseline")
-    metrics_hybrid = compute_metrics(hybrid_test_returns, test_idx_ret, label="GNN+Influence (ours)")
+    metrics_hybrid_v1 = compute_metrics(hybrid_v1_test_returns, test_idx_ret, label="Hybrid v1 (SHAP+Influence)")
+    metrics_hybrid_v2 = compute_metrics(hybrid_v2_test_returns, test_idx_ret, label="Hybrid v2 (SHAP+EmbSHAP+Infl)")
 
-    print("\nBaseline metrics:")
-    for k_m, v in metrics_baseline.items():
-        if k_m != "label":
-            print(f"  {k_m}: {v}")
-
-    print("\nHybrid metrics:")
-    for k_m, v in metrics_hybrid.items():
-        if k_m != "label":
-            print(f"  {k_m}: {v}")
+    for label, metrics in [("Baseline", metrics_baseline),
+                           ("Hybrid v1", metrics_hybrid_v1),
+                           ("Hybrid v2 (ours)", metrics_hybrid_v2)]:
+        print(f"\n{label} metrics:")
+        for k_m, v in metrics.items():
+            if k_m != "label":
+                print(f"  {k_m}: {v}")
 
     # -----------------------------------------------------------------------
     # Stage 9: Plots and results
@@ -269,20 +326,33 @@ def main(cfg: dict, skip_download: bool, skip_graph: bool, skip_train: bool):
     else:
         print("  Skipping loss curve plot (no loss data).")
 
+    # Use Hybrid v2 as the primary "ours" line, with v1 and baseline also shown
     plot_cumulative_returns(
-        test_dates, test_idx_ret, baseline_test_returns, hybrid_test_returns, figs_dir
+        test_dates, test_idx_ret, baseline_test_returns,
+        hybrid_v2_test_returns, figs_dir,
+        extra_returns=hybrid_v1_test_returns,
+        extra_label="Hybrid v1 (SHAP+Infl)",
     )
     plot_tracking_error_rolling(
-        test_dates, test_idx_ret, baseline_test_returns, hybrid_test_returns,
-        window=30, save_dir=figs_dir
+        test_dates, test_idx_ret, baseline_test_returns,
+        hybrid_v2_test_returns, window=30, save_dir=figs_dir,
+        extra_returns=hybrid_v1_test_returns,
+        extra_label="Hybrid v1",
     )
-    plot_weight_allocation(selected, weights, sector_map, figs_dir)
-    plot_influence_scores(tickers, hybrid_scores, selected, figs_dir)
+    plot_weight_allocation(selected_v2, weights_v2, sector_map, figs_dir)
+    plot_influence_scores(tickers, hybrid_scores_v2, selected_v2, figs_dir)
 
-    save_results([metrics_baseline, metrics_hybrid], res_dir)
+    # Embedding SHAP vs RF SHAP scatter
+    plot_shap_comparison(tickers, shap_scores, emb_shap_scores, selected_v2, figs_dir)
 
-    # Save allocation CSV
-    alloc_df = pd.DataFrame({"ticker": selected, "weight": weights, "sector": [sector_map.get(t, "?") for t in selected]})
+    save_results([metrics_baseline, metrics_hybrid_v1, metrics_hybrid_v2], res_dir)
+
+    # Save allocation CSV (v2 is the primary)
+    alloc_df = pd.DataFrame({
+        "ticker": selected_v2,
+        "weight": weights_v2,
+        "sector": [sector_map.get(t, "?") for t in selected_v2],
+    })
     alloc_df = alloc_df.sort_values("weight", ascending=False)
     alloc_df.to_csv(os.path.join(res_dir, "allocation.csv"), index=False)
     print(f"Allocation saved → {res_dir}/allocation.csv")

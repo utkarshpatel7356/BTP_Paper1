@@ -23,14 +23,18 @@ model:
   gru_window: 20           # temporal lookback (trading days) — reduced for T4 GPU
   dropout: 0.1
   lr: 0.001
+  diversity_lambda: 0.1    # embedding diversity regularisation (NEW)
   epochs: 100
   batch_size: 1
   device: "cuda"           # Tesla T4 GPU
 
 selection:
   k: 50                    # subset size
-  alpha_shap: 0.5          # weight on SHAP vs GNN influence score
+  alpha_shap: 0.4          # weight on RF-SHAP in three-way fusion
+  beta_emb_shap: 0.4       # weight on embedding-SHAP (NEW)
+  # influence gets 1 - alpha - beta = 0.2
   min_per_sector: 1        # minimum stocks per GICS sector
+  ridge_alpha: 1.0         # L2 regularisation for embedding regressor
 
 allocation:
   lambda_reg: 0.01         # GNN edge-attention regularisation in QP

@@ -112,6 +112,41 @@ def fuse_scores(
     return alpha * _norm(shap_scores) + (1 - alpha) * _norm(influence_scores)
 
 
+def fuse_scores_v2(
+    shap_rf: np.ndarray,        # (N,) from RF+SHAP
+    shap_emb: np.ndarray,       # (N,) from embedding regressor SHAP
+    influence_scores: np.ndarray, # (N,) from GNN influence
+    alpha: float = 0.4,
+    beta: float = 0.4,
+) -> np.ndarray:
+    """
+    Three-way fusion of scoring signals.
+
+    hybrid = α · norm(shap_rf) + β · norm(shap_emb) + (1-α-β) · norm(influence)
+
+    Parameters
+    ----------
+    shap_rf          : (N,) SHAP scores from RF baseline
+    shap_emb         : (N,) SHAP scores from embedding regressor
+    influence_scores : (N,) influence scores from GNN greedy IM
+    alpha            : weight on RF-SHAP
+    beta             : weight on embedding-SHAP
+                       influence gets (1 - alpha - beta)
+
+    Returns
+    -------
+    hybrid_scores : (N,) normalised combined scores
+    """
+    gamma = max(1.0 - alpha - beta, 0.0)
+
+    def _norm(x):
+        r = x - x.min()
+        d = r.max() + 1e-8
+        return r / d
+
+    return alpha * _norm(shap_rf) + beta * _norm(shap_emb) + gamma * _norm(influence_scores)
+
+
 def select_with_sector_constraint(
     hybrid_scores: np.ndarray,
     tickers: List[str],

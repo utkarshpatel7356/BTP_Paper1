@@ -30,6 +30,7 @@ COLORS = {
     "index":    "#2563EB",   # blue
     "baseline": "#D97706",   # amber
     "hybrid":   "#059669",   # green
+    "hybrid_v1": "#8B5CF6",  # purple — legacy hybrid v1
     "te_band":  "#DCFCE7",
 }
 
@@ -107,6 +108,8 @@ def plot_cumulative_returns(
     hybrid_returns: np.ndarray,
     save_dir: str,
     title: str = "Cumulative Returns — Sparse Index vs S&P 500",
+    extra_returns: Optional[np.ndarray] = None,
+    extra_label: str = "Hybrid v1",
 ):
     _setup_style()
     fig, ax = plt.subplots(figsize=(12, 5))
@@ -115,10 +118,13 @@ def plot_cumulative_returns(
     cum_hyb = np.cumprod(1 + hybrid_returns) * 100
 
     ax.plot(dates, cum_idx, color=COLORS["index"],    lw=2.0, label="S&P 500 (full)")
-    ax.plot(dates, cum_hyb, color=COLORS["hybrid"],   lw=1.8, label="GNN + Influence (ours)", linestyle="-")
+    ax.plot(dates, cum_hyb, color=COLORS["hybrid"],   lw=1.8, label="Hybrid v2 (ours)", linestyle="-")
     if baseline_returns is not None:
         cum_bl = np.cumprod(1 + baseline_returns) * 100
         ax.plot(dates, cum_bl, color=COLORS["baseline"], lw=1.5, label="RF + SHAP baseline", linestyle="--")
+    if extra_returns is not None:
+        cum_extra = np.cumprod(1 + extra_returns) * 100
+        ax.plot(dates, cum_extra, color=COLORS["hybrid_v1"], lw=1.3, label=extra_label, linestyle="-.")
 
     ax.set_title(title, fontsize=13, pad=12)
     ax.set_ylabel("Cumulative return (rebased to 100)")
@@ -139,6 +145,8 @@ def plot_tracking_error_rolling(
     hybrid_returns: np.ndarray,
     window: int = 30,
     save_dir: str = "outputs/figures",
+    extra_returns: Optional[np.ndarray] = None,
+    extra_label: str = "Hybrid v1",
 ):
     _setup_style()
     fig, ax = plt.subplots(figsize=(12, 4))
@@ -148,12 +156,16 @@ def plot_tracking_error_rolling(
         return pd.Series(excess).rolling(w).std().values * np.sqrt(252) * 100
 
     te_hyb = rolling_te(hybrid_returns, index_returns, window)
-    ax.plot(dates, te_hyb, color=COLORS["hybrid"], lw=1.8, label="GNN + Influence")
+    ax.plot(dates, te_hyb, color=COLORS["hybrid"], lw=1.8, label="Hybrid v2 (ours)")
     ax.fill_between(dates, 0, te_hyb, color=COLORS["te_band"], alpha=0.4)
 
     if baseline_returns is not None:
         te_bl = rolling_te(baseline_returns, index_returns, window)
         ax.plot(dates, te_bl, color=COLORS["baseline"], lw=1.5, linestyle="--", label="RF + SHAP baseline")
+
+    if extra_returns is not None:
+        te_extra = rolling_te(extra_returns, index_returns, window)
+        ax.plot(dates, te_extra, color=COLORS["hybrid_v1"], lw=1.3, linestyle="-.", label=extra_label)
 
     ax.set_title(f"{window}-day rolling tracking error (annualised %)", fontsize=13)
     ax.set_ylabel("Tracking error (%)")
@@ -256,3 +268,62 @@ def save_results(metrics_list: List[dict], save_dir: str):
     # Also save as CSV
     df = pd.DataFrame(metrics_list)
     df.to_csv(os.path.join(save_dir, "metrics.csv"), index=False)
+
+
+def plot_shap_comparison(
+    tickers: List[str],
+    shap_rf: np.ndarray,       # (N,) RF-SHAP scores
+    shap_emb: np.ndarray,      # (N,) embedding-SHAP scores
+    selected: List[str],
+    save_dir: str,
+):
+    """
+    Scatter plot comparing RF-SHAP vs Embedding-SHAP per stock.
+    Points are coloured by selected (green) vs not selected (grey).
+    """
+    _setup_style()
+    fig, ax = plt.subplots(figsize=(8, 7))
+
+    # Normalise both to [0, 1] for comparable axes
+    def _norm(x):
+        r = x - x.min()
+        return r / (r.max() + 1e-8)
+
+    rf_n = _norm(shap_rf)
+    emb_n = _norm(shap_emb)
+
+    selected_set = set(selected)
+    colors = [COLORS["hybrid"] if t in selected_set else "#D1D5DB" for t in tickers]
+    alphas = [0.85 if t in selected_set else 0.35 for t in tickers]
+
+    for i, t in enumerate(tickers):
+        ax.scatter(rf_n[i], emb_n[i], c=colors[i], alpha=alphas[i], s=30, edgecolors="none")
+
+    # Label top-10 by combined score
+    combined = rf_n + emb_n
+    top10 = np.argsort(combined)[::-1][:10]
+    for i in top10:
+        ax.annotate(tickers[i], (rf_n[i], emb_n[i]),
+                    fontsize=7, ha="left", va="bottom",
+                    xytext=(3, 3), textcoords="offset points")
+
+    # Diagonal line
+    ax.plot([0, 1], [0, 1], color="#9CA3AF", lw=0.8, ls="--", alpha=0.5)
+
+    ax.set_xlabel("RF-SHAP score (normalised)", fontsize=11)
+    ax.set_ylabel("Embedding-SHAP score (normalised)", fontsize=11)
+    ax.set_title("RF-SHAP vs Embedding-SHAP per stock", fontsize=13)
+    ax.set_xlim(-0.02, 1.02)
+    ax.set_ylim(-0.02, 1.02)
+
+    from matplotlib.patches import Patch
+    legend_els = [
+        Patch(facecolor=COLORS["hybrid"], label="Selected (v2)"),
+        Patch(facecolor="#D1D5DB", label="Not selected"),
+    ]
+    ax.legend(handles=legend_els, fontsize=9, loc="upper left")
+    fig.tight_layout()
+    path = os.path.join(save_dir, "shap_comparison.png")
+    fig.savefig(path, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved → {path}")

@@ -11,7 +11,7 @@
     "beta": 0.9828
   },
   {
-    "label": "GNN+Influence (ours)",
+    "label": "Hybrid v1 (SHAP+Influence)",
     "tracking_error_pct": 4.7899,
     "info_ratio": 0.7582,
     "alpha_annual_pct": 3.6315,
@@ -20,5 +20,16 @@
     "max_drawdown_pct": -9.53,
     "sharpe": 1.1855,
     "beta": 1.0535
+  },
+  {
+    "label": "Hybrid v2 (SHAP+EmbSHAP+Infl)",
+    "tracking_error_pct": 3.8318,
+    "info_ratio": -0.5445,
+    "alpha_annual_pct": -2.0865,
+    "total_return_pct": 6.19,
+    "index_total_return_pct": 7.33,
+    "max_drawdown_pct": -8.39,
+    "sharpe": 0.8933,
+    "beta": 0.9841
   }
 ]

@@ -29,6 +29,30 @@ from typing import Tuple
 from src.models.gat_model import SparseIndexGNN
 
 
+def _embedding_diversity_loss(
+    embeddings: torch.Tensor,
+    margin: float = 0.1,
+) -> torch.Tensor:
+    """
+    Penalise embedding collapse by encouraging low mean cosine
+    similarity among node embeddings.
+
+    Parameters
+    ----------
+    embeddings : (N+1, hidden) node embeddings from one forward pass
+    margin     : target maximum mean cosine similarity
+
+    Returns
+    -------
+    loss : scalar tensor — ReLU(mean_cosine_sim - margin)
+    """
+    normed = torch.nn.functional.normalize(embeddings, dim=-1)
+    sim_matrix = normed @ normed.T  # (N+1, N+1)
+    mask = ~torch.eye(sim_matrix.shape[0], dtype=torch.bool, device=sim_matrix.device)
+    mean_sim = sim_matrix[mask].mean()
+    return torch.nn.functional.relu(mean_sim - margin)
+
+
 class WindowDataset(Dataset):
     """
     Lazy sliding-window dataset. Slices windows on-the-fly from the
@@ -143,11 +167,19 @@ def train_model(
 
             with autocast('cuda', enabled=use_amp):
                 preds = []
+                all_embeddings = []
                 for b in range(len(batch_x)):
-                    y_hat, _, _, _ = model(batch_x[b], edge_index, edge_weight)
+                    y_hat, embs, _, _ = model(batch_x[b], edge_index, edge_weight)
                     preds.append(y_hat)
+                    all_embeddings.append(embs)
                 preds = torch.stack(preds)
                 loss = criterion(preds, batch_y)
+
+                # Embedding diversity regularisation
+                div_lambda = cfg["model"].get("diversity_lambda", 0.0)
+                if div_lambda > 0 and len(all_embeddings) > 0:
+                    div_loss = _embedding_diversity_loss(all_embeddings[-1])
+                    loss = loss + div_lambda * div_loss
 
             if scaler is not None:
                 scaler.scale(loss).backward()
