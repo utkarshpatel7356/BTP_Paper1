@@ -85,7 +85,7 @@ def solve_tracking_error_qp(
     w = cp.Variable(K, nonneg=True)
 
     # Tracking error term
-    te_term = cp.quad_form(w - w_idx, Sigma)
+    te_term = cp.quad_form(w - w_idx, cp.psd_wrap(Sigma))
 
     # GNN attention regularisation: penalise correlated pairs
     if attention_matrix is not None:
