@@ -184,13 +184,18 @@ def train_model(
             if scaler is not None:
                 scaler.scale(loss).backward()
                 scaler.unscale_(optimiser)
-                nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                # Capture the norm here
+                raw_grad_norm = nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 scaler.step(optimiser)
                 scaler.update()
             else:
                 loss.backward()
-                nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                # Capture the norm here
+                raw_grad_norm = nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 optimiser.step()
+            
+            if (n_samples // len(batch_x)) % 10 == 0:
+                print(f"  [Monitor] Loss: {loss.item():.4f} | Raw Grad Norm: {raw_grad_norm.item():.4f}")
 
             epoch_loss += loss.item() * len(batch_x)
             n_samples += len(batch_x)

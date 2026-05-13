@@ -12,24 +12,24 @@
   },
   {
     "label": "Hybrid v1 (SHAP+Influence)",
-    "tracking_error_pct": 5.9895,
-    "info_ratio": 1.8249,
-    "alpha_annual_pct": 10.9305,
-    "total_return_pct": 13.05,
+    "tracking_error_pct": 6.7072,
+    "info_ratio": -1.762,
+    "alpha_annual_pct": -11.8178,
+    "total_return_pct": 1.19,
     "index_total_return_pct": 7.33,
-    "max_drawdown_pct": -10.12,
-    "sharpe": 1.4702,
-    "beta": 1.176
+    "max_drawdown_pct": -8.04,
+    "sharpe": 0.2391,
+    "beta": 0.8701
   },
   {
     "label": "Hybrid v2 (SHAP+EmbSHAP+Infl)",
-    "tracking_error_pct": 3.7419,
-    "info_ratio": 0.2562,
-    "alpha_annual_pct": 0.9587,
-    "total_return_pct": 7.75,
+    "tracking_error_pct": 5.1033,
+    "info_ratio": 1.0354,
+    "alpha_annual_pct": 5.2839,
+    "total_return_pct": 10.03,
     "index_total_return_pct": 7.33,
-    "max_drawdown_pct": -9.23,
-    "sharpe": 1.0387,
-    "beta": 1.05
+    "max_drawdown_pct": -9.48,
+    "sharpe": 1.2461,
+    "beta": 1.0892
   }
 ]

@@ -12,14 +12,14 @@
   },
   {
     "label": "GNN Influence Only",
-    "tracking_error_pct": 7.8729,
-    "info_ratio": 0.1288,
-    "alpha_annual_pct": 1.0141,
-    "total_return_pct": 7.57,
+    "tracking_error_pct": 13.4292,
+    "info_ratio": -1.467,
+    "alpha_annual_pct": -19.7008,
+    "total_return_pct": -2.52,
     "index_total_return_pct": 7.33,
-    "max_drawdown_pct": -9.66,
-    "sharpe": 0.9078,
-    "beta": 1.1197
+    "max_drawdown_pct": -9.09,
+    "sharpe": -0.4162,
+    "beta": 0.3487
   },
   {
     "label": "Emb-SHAP Only",
@@ -34,35 +34,35 @@
   },
   {
     "label": "Hybrid v1",
-    "tracking_error_pct": 4.762,
-    "info_ratio": 0.9086,
-    "alpha_annual_pct": 4.3266,
-    "total_return_pct": 9.59,
+    "tracking_error_pct": 7.1676,
+    "info_ratio": -0.869,
+    "alpha_annual_pct": -6.2287,
+    "total_return_pct": 4.14,
     "index_total_return_pct": 7.33,
-    "max_drawdown_pct": -9.0,
-    "sharpe": 1.262,
-    "beta": 1.0229
+    "max_drawdown_pct": -6.93,
+    "sharpe": 0.6899,
+    "beta": 0.783
   },
   {
     "label": "Hybrid v2",
-    "tracking_error_pct": 3.7043,
-    "info_ratio": 0.1388,
-    "alpha_annual_pct": 0.5141,
-    "total_return_pct": 7.55,
+    "tracking_error_pct": 4.1016,
+    "info_ratio": 1.4466,
+    "alpha_annual_pct": 5.9334,
+    "total_return_pct": 10.48,
     "index_total_return_pct": 7.33,
-    "max_drawdown_pct": -8.8,
-    "sharpe": 1.043,
-    "beta": 1.0143
+    "max_drawdown_pct": -8.83,
+    "sharpe": 1.3723,
+    "beta": 1.0317
   },
   {
     "label": "Hybrid v2 + Attn QP",
-    "tracking_error_pct": 3.7419,
-    "info_ratio": 0.2562,
-    "alpha_annual_pct": 0.9587,
-    "total_return_pct": 7.75,
+    "tracking_error_pct": 5.1033,
+    "info_ratio": 1.0354,
+    "alpha_annual_pct": 5.2839,
+    "total_return_pct": 10.03,
     "index_total_return_pct": 7.33,
-    "max_drawdown_pct": -9.23,
-    "sharpe": 1.0387,
-    "beta": 1.05
+    "max_drawdown_pct": -9.48,
+    "sharpe": 1.2461,
+    "beta": 1.0892
   }
 ]

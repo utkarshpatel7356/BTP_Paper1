@@ -129,6 +129,23 @@ def main(cfg, skip_download, skip_graph, skip_train):
     plot_score_distributions(shap_scores, influence_scores, emb_shap_scores, FIGS)
     plot_top30_bars(shap_scores, influence_scores, emb_shap_scores, tickers, FIGS)
 
+    # === Compute raw trailing 60-day betas for the constraint ===
+    enforce_beta = acfg.get("enforce_beta", False)
+    if enforce_beta:
+        print("\nCalculating trailing 60-day betas for allocation constraint...")
+        recent_stock_ret = train_ret[-60:]
+        recent_idx_ret = train_idx[-60:]
+
+        X_centered = recent_stock_ret - recent_stock_ret.mean(axis=0)
+        y_centered = recent_idx_ret - recent_idx_ret.mean()
+
+        covariances = (X_centered.T @ y_centered) / (len(y_centered) - 1)
+        idx_variance = np.var(recent_idx_ret, ddof=1)
+
+        raw_betas_all = covariances / idx_variance
+    else:
+        raw_betas_all = None
+
     # === Run all 6 strategies ===
     print("\n" + "=" * 60 + "\nRunning 6 strategies\n" + "=" * 60)
     sp500_df = fetch_sp500_tickers()
@@ -175,8 +192,10 @@ def main(cfg, skip_download, skip_graph, skip_train):
     sel4 = select_with_sector_constraint(hybrid_v1, tickers, sector_map, k=k,
                                           min_per_sector=scfg["min_per_sector"])
     sel4_idx = [tickers.index(t) for t in sel4]
+    betas_4 = raw_betas_all[sel4_idx] if enforce_beta else None
     w4, _ = solve_tracking_error_qp(train_ret[:, sel4_idx], train_idx,
                                      attention_matrix=None,
+                                     betas=betas_4,
                                      lambda_reg=0, max_weight=acfg["max_weight"],
                                      solver=acfg["solver"])
     ret4 = test_ret[:, sel4_idx] @ w4
@@ -193,8 +212,10 @@ def main(cfg, skip_download, skip_graph, skip_train):
     sel5 = select_with_sector_constraint(hybrid_v2, tickers, sector_map, k=k,
                                           min_per_sector=scfg["min_per_sector"])
     sel5_idx = [tickers.index(t) for t in sel5]
+    betas_5 = raw_betas_all[sel5_idx] if enforce_beta else None
     w5, _ = solve_tracking_error_qp(train_ret[:, sel5_idx], train_idx,
                                      attention_matrix=None,
+                                     betas=betas_5,
                                      lambda_reg=0, max_weight=acfg["max_weight"],
                                      solver=acfg["solver"])
     ret5 = test_ret[:, sel5_idx] @ w5
@@ -210,8 +231,10 @@ def main(cfg, skip_download, skip_graph, skip_train):
     A_attn = None
     if attn_np is not None and attn_ei_np is not None:
         A_attn = build_attention_submatrix(attn_np, attn_ei_np, sel6_idx, n_total=N+1)
+    betas_6 = raw_betas_all[sel6_idx] if enforce_beta else None
     w6, _ = solve_tracking_error_qp(train_ret[:, sel6_idx], train_idx,
                                      attention_matrix=A_attn,
+                                     betas=betas_6,
                                      lambda_reg=acfg["lambda_reg"],
                                      max_weight=acfg["max_weight"],
                                      solver=acfg["solver"])
@@ -243,8 +266,9 @@ def main(cfg, skip_download, skip_graph, skip_train):
             sel_ab = select_with_sector_constraint(scores_ab, tickers, sector_map,
                                                     k=k, min_per_sector=scfg["min_per_sector"])
             idx_ab = [tickers.index(t) for t in sel_ab]
+            betas_ab = raw_betas_all[idx_ab] if enforce_beta else None
             w_ab, te_ab = solve_tracking_error_qp(
-                train_ret[:, idx_ab], train_idx, attention_matrix=None,
+                train_ret[:, idx_ab], train_idx, attention_matrix=None, betas=betas_ab,
                 lambda_reg=0, max_weight=acfg["max_weight"], solver=acfg["solver"])
             # Compute TEST TE
             port_ab = test_ret[:, idx_ab] @ w_ab

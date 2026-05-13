@@ -38,6 +38,9 @@ def solve_tracking_error_qp(
     lambda_reg: float = 0.01,
     max_weight: float = 0.10,
     solver: str = "OSQP",
+    beta_constrained: bool = False,
+    beta_lb: float = 0.95,
+    beta_ub: float = 1.05,
 ) -> Tuple[np.ndarray, float]:
     """
     Solve the GNN-regularised tracking error QP.
@@ -50,6 +53,8 @@ def solve_tracking_error_qp(
     lambda_reg        : regularisation coefficient for attention penalty
     max_weight        : max weight per stock (0.10 = 10%)
     solver            : OSQP (fast) or SCS (robust)
+    beta_constrained  : if True, add linear beta constraints beta_lb <= wᵀβ <= beta_ub
+    beta_lb, beta_ub  : bounds on portfolio beta (default 0.95–1.05)
 
     Returns
     -------
@@ -67,6 +72,14 @@ def solve_tracking_error_qp(
 
     # Index proxy weights (equal weight if market caps unavailable)
     w_idx = np.ones(K) / K
+
+    # Per-stock betas vs index (OLS: β_i = cov(r_i, r_idx) / var(r_idx))
+    # Used for the beta constraint: wᵀβ_stocks ≈ portfolio_beta
+    var_idx = np.var(index_returns) + 1e-8
+    stock_betas = np.array([
+        np.cov(selected_returns[:, i], index_returns)[0, 1] / var_idx
+        for i in range(K)
+    ])  # (K,)
 
     # Decision variable
     w = cp.Variable(K, nonneg=True)
@@ -88,6 +101,18 @@ def solve_tracking_error_qp(
         cp.sum(w) == 1,
         w <= max_weight,
     ]
+
+    # Beta constraint: keeps portfolio beta within [beta_lb, beta_ub] of 1.0.
+    # This is a linear constraint: beta_lb <= wᵀβ_stocks <= beta_ub.
+    # Critical for preventing the optimizer from taking unhedged market-directional
+    # bets (beta drift), which inflates IR and total return via systematic exposure
+    # rather than true stock-selection alpha. Without this constraint the QP acts
+    # as an "error maximiser" that exploits the train/test beta mismatch.
+    if beta_constrained:
+        constraints += [
+            stock_betas @ w >= beta_lb,
+            stock_betas @ w <= beta_ub,
+        ]
 
     prob = cp.Problem(objective, constraints)
 

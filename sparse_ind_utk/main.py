@@ -50,9 +50,11 @@ from src.evaluation.metrics import (
     plot_shap_comparison,
     save_results,
 )
+from benchmarks import run_all_benchmarks, print_comparison_table
 
 
-def main(cfg: dict, skip_download: bool, skip_graph: bool, skip_train: bool):
+def main(cfg: dict, skip_download: bool, skip_graph: bool, skip_train: bool,
+         run_benchmarks: bool = False):
     os.makedirs(cfg["outputs"]["figures_dir"], exist_ok=True)
     os.makedirs(cfg["outputs"]["results_dir"], exist_ok=True)
 
@@ -265,6 +267,9 @@ def main(cfg: dict, skip_download: bool, skip_graph: bool, skip_train: bool):
         lambda_reg=acfg["lambda_reg"],
         max_weight=acfg["max_weight"],
         solver=acfg["solver"],
+        beta_constrained=acfg.get("beta_constrained", False),
+        beta_lb=acfg.get("beta_lb", 0.95),
+        beta_ub=acfg.get("beta_ub", 1.05),
     )
     print(f"\n[Hybrid v1] Train TE: {train_te_v1:.2f}%")
     order_v1 = np.argsort(weights_v1)[::-1]
@@ -284,11 +289,29 @@ def main(cfg: dict, skip_download: bool, skip_graph: bool, skip_train: bool):
         lambda_reg=acfg["lambda_reg"],
         max_weight=acfg["max_weight"],
         solver=acfg["solver"],
+        beta_constrained=acfg.get("beta_constrained", False),
+        beta_lb=acfg.get("beta_lb", 0.95),
+        beta_ub=acfg.get("beta_ub", 1.05),
     )
     print(f"\n[Hybrid v2] Train TE: {train_te_v2:.2f}%")
     order_v2 = np.argsort(weights_v2)[::-1]
     for i in order_v2[:3]:
         print(f"  {selected_v2[i]:8s}  {weights_v2[i]*100:.2f}%")
+
+    # -----------------------------------------------------------------------
+    # Stage 7.5: Traditional benchmarks (B1, B2, B3)
+    # Required for reviewer credibility — proves GNN adds value over
+    # simpler methods that don't need a GPU or graph construction.
+    # -----------------------------------------------------------------------
+    benchmark_metrics = {}
+    if run_benchmarks:
+        print("\n" + "=" * 60)
+        print("STAGE 7.5: Traditional benchmarks")
+        print("=" * 60)
+        benchmark_metrics = run_all_benchmarks(
+            train_stock_ret, test_stock_ret, train_idx_ret, test_idx_ret,
+            tickers, sector_map, cfg
+        )
 
     # -----------------------------------------------------------------------
     # Stage 8: Evaluate on test split (3 strategies)
@@ -310,6 +333,13 @@ def main(cfg: dict, skip_download: bool, skip_graph: bool, skip_train: bool):
         for k_m, v in metrics.items():
             if k_m != "label":
                 print(f"  {k_m}: {v}")
+
+    # Print full comparison table including benchmarks
+    gnn_results = [metrics_baseline, metrics_hybrid_v1, metrics_hybrid_v2]
+    if benchmark_metrics:
+        print_comparison_table(benchmark_metrics, gnn_results)
+    else:
+        print("\nTip: run with --run-benchmarks to add B1/B2/B3 traditional baselines.")
 
     # -----------------------------------------------------------------------
     # Stage 9: Plots and results
@@ -345,7 +375,8 @@ def main(cfg: dict, skip_download: bool, skip_graph: bool, skip_train: bool):
     # Embedding SHAP vs RF SHAP scatter
     plot_shap_comparison(tickers, shap_scores, emb_shap_scores, selected_v2, figs_dir)
 
-    save_results([metrics_baseline, metrics_hybrid_v1, metrics_hybrid_v2], res_dir)
+    all_results = list(benchmark_metrics.values()) + [metrics_baseline, metrics_hybrid_v1, metrics_hybrid_v2]
+    save_results(all_results, res_dir)
 
     # Save allocation CSV (v2 is the primary)
     alloc_df = pd.DataFrame({
@@ -363,15 +394,54 @@ def main(cfg: dict, skip_download: bool, skip_graph: bool, skip_train: bool):
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Sparse S&P 500 index replication pipeline")
-    parser.add_argument("--config", default="configs/config.yaml")
+    # Accept both "config.yaml" and "configs/config.yaml" — works from project root
+    # regardless of whether user passes the flag or uses the default.
+    # Canonical location is configs/config.yaml; fallback handles old invocations.
+    _default_cfg = "configs/config.yaml"
+    parser.add_argument("--config", default=_default_cfg)
     parser.add_argument("--skip-download", action="store_true")
     parser.add_argument("--skip-graph",    action="store_true")
     parser.add_argument("--skip-train",    action="store_true")
+    # Load alpha, beta from CV output instead of config.yaml -- use after running cv_fusion.py
+    parser.add_argument("--use-cv-params", action="store_true",
+                        help="Load fusion weights from outputs/cv/best_params.json "
+                             "(selected on validation split, never on test set)")
+    # Run the three traditional benchmarks for fair comparison
+    parser.add_argument("--run-benchmarks", action="store_true",
+                        help="Run B1/B2/B3 traditional benchmarks alongside GNN methods")
     args = parser.parse_args()
 
-    with open(args.config) as f:
+    # Resolve config path: if the given path doesn't exist, try prepending configs/
+    config_path = args.config
+    if not os.path.exists(config_path):
+        alt = os.path.join("configs", os.path.basename(config_path))
+        if os.path.exists(alt):
+            config_path = alt
+        else:
+            raise FileNotFoundError(
+                f"Config not found at '{config_path}' or '{alt}'. "
+                f"Run from the project root and use --config configs/config.yaml"
+            )
+
+    with open(config_path) as f:
         cfg = yaml.safe_load(f)
 
-    main(cfg, args.skip_download, args.skip_graph, args.skip_train)
+    # Override alpha, beta with CV-selected values if requested
+    if args.use_cv_params:
+        cv_params_path = "outputs/cv/best_params.json"
+        if os.path.exists(cv_params_path):
+            with open(cv_params_path) as f:
+                cv_best = json.load(f)
+            cfg["selection"]["alpha_shap"]    = cv_best["alpha_shap"]
+            cfg["selection"]["beta_emb_shap"] = cv_best["beta_emb_shap"]
+            print(f"Loaded CV params: alpha={cv_best['alpha_shap']}, beta={cv_best['beta_emb_shap']} "
+                  f"(CV-val TE={cv_best['cv_val_te']:.3f}%)")
+        else:
+            print("WARNING: --use-cv-params set but outputs/cv/best_params.json not found. "
+                  "Run cv_fusion.py first. Using config.yaml values.")
+
+    main(cfg, args.skip_download, args.skip_graph, args.skip_train,
+         run_benchmarks=args.run_benchmarks)
