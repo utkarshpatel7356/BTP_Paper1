@@ -1,6 +1,6 @@
 # Code Walkthrough — Sparse Index Replication Pipeline
 
-A file-by-file description of every source file in the project: what it does, how it works, key functions, and how to run the full system.
+A file-by-file description of every source file in the project: what it does, how it works, key functions, and how to run the full system
 
 ---
 
